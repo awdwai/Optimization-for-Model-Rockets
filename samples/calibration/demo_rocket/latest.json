@@ -1,0 +1,11 @@
+{
+  "rocket_id": "demo_rocket",
+  "version": "identity",
+  "corrections": {
+    "cd_body_multiplier": 1.0,
+    "thrust_scale_factor": 1.0,
+    "thrust_scale_std": 0.03,
+    "burn_time_scale_factor": 1.0,
+    "cp_shift_in": 0.0
+  }
+}

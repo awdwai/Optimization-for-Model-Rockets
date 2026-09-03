@@ -1,0 +1,13 @@
+{
+  "rocket_id": "demo_rocket",
+  "openrocket_file": "demo_rocket.ork",
+  "mass_properties": {
+    "dry_mass_g": 380.0,
+    "wet_mass_g": 450.0,
+    "cm_in": 18.0,
+    "cp_in": 24.0
+  },
+  "motor_properties": {
+    "motor_designation": "F50-4T"
+  }
+}
