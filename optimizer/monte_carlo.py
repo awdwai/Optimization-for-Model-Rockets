@@ -53,11 +53,13 @@ def _perturb_environment(
 ) -> EnvironmentalState:
     wind = base.wind
     gust_spread = max(wind.wind_gust_mph - wind.ground_wind_speed_mph, 0.5)
-    # Treat gust as ~2.5σ above mean
+    # Treat reported gust as ~2.5σ above the mean (§5)
     sigma_speed = gust_spread / 2.5
-    speed = max(0.0, rng.normal(wind.ground_wind_speed_mph, sigma_speed))
+    speed = max(0.0, float(rng.normal(wind.ground_wind_speed_mph, sigma_speed)))
     direction = float(rng.normal(wind.wind_direction_deg, 8.0)) % 360.0
+    dir_offset = direction - wind.wind_direction_deg
 
+    # One correlated gust factor across all altitude layers (§5)
     gust_factor = speed / max(wind.ground_wind_speed_mph, 1e-3)
 
     new_layers: list[WindLayer] = []
@@ -66,14 +68,21 @@ def _perturb_environment(
             WindLayer(
                 layer_ft=layer.layer_ft,
                 speed_mph=max(0.0, layer.speed_mph * gust_factor),
-                direction_deg=float(rng.normal(layer.direction_deg, 8.0)) % 360.0,
+                direction_deg=(layer.direction_deg + dir_offset) % 360.0,
             )
         )
 
     data = base.model_dump()
     data["wind"]["ground_wind_speed_mph"] = speed
     data["wind"]["wind_direction_deg"] = direction
-    data["wind"]["wind_gradient"] = new_layers
+    data["wind"]["wind_gradient"] = [layer.model_dump() for layer in new_layers]
+    # Preserve explicit thermal override across re-validation
+    if base.surface.thermal_was_explicit:
+        data["surface"]["thermal_activity_estimate"] = (
+            base.surface.thermal_activity_estimate.value
+            if base.surface.thermal_activity_estimate is not None
+            else None
+        )
     return EnvironmentalState.model_validate(data)
 
 
@@ -87,8 +96,27 @@ def _apply_thermal(
     if rng.random() > p:
         return descent_s
     params = calibration.corrections.thermal_params(category)
-    multiplier = max(1.0, rng.normal(params.mean, params.std))
+    multiplier = max(1.0, float(rng.normal(params.mean, max(params.std, 1e-9))))
     return descent_s * multiplier
+
+
+def _apply_residual_noise(
+    apogee_ft: float,
+    descent_s: float,
+    calibration: CalibrationModel,
+    rng: np.random.Generator,
+) -> tuple[float, float]:
+    """Add Trainer residual_stats noise floor so identity calibration is not overconfident."""
+    rs = calibration.residual_stats
+    apogee = apogee_ft + float(
+        rng.normal(rs.apogee_mean_error_ft, max(rs.apogee_std_error_ft, 0.0))
+    )
+    descent = descent_s + float(
+        rng.normal(
+            rs.descent_time_mean_error_s, max(rs.descent_time_std_error_s, 0.0)
+        )
+    )
+    return max(apogee, 1.0), max(descent, 0.1)
 
 
 class MonteCarloRunner:
@@ -129,16 +157,23 @@ class MonteCarloRunner:
         outcomes: list[MCSampleOutcome] = []
         thrust_mu = calibration.corrections.thrust_scale_factor
         thrust_std = calibration.corrections.thrust_scale_std
+        burn_mu = calibration.corrections.burn_time_scale_factor
 
         while True:
             batch_n = min(self.batch_size, self.max_samples - len(outcomes))
+            if batch_n <= 0:
+                break
             for _ in range(batch_n):
                 env = _perturb_environment(environment, self.rng)
-                # Sample thrust for this draw by temporarily cloning corrections
-                thrust_draw = float(self.rng.normal(thrust_mu, thrust_std))
-                cal_data = calibration.model_dump()
+                thrust_draw = float(self.rng.normal(thrust_mu, max(thrust_std, 0.0)))
+                # Mild motor burn-time scatter (±3% around fitted scale)
+                burn_draw = float(self.rng.normal(burn_mu, 0.03))
+                cal_data = calibration.model_dump(mode="json")
                 cal_data["corrections"]["thrust_scale_factor"] = float(
                     np.clip(thrust_draw, 0.9, 1.1)
+                )
+                cal_data["corrections"]["burn_time_scale_factor"] = float(
+                    np.clip(burn_draw, 0.85, 1.15)
                 )
                 cal = CalibrationModel.model_validate(cal_data)
 
@@ -154,16 +189,24 @@ class MonteCarloRunner:
                 unstable = (
                     result.rail_exit_stability_calibers < self.min_stability_calibers
                 )
-                thermal_cat = env.surface.thermal_activity_estimate or ThermalActivity.none
+                thermal_cat = (
+                    env.surface.thermal_activity_estimate or ThermalActivity.none
+                )
                 descent = _apply_thermal(
                     result.descent_time_s, thermal_cat, calibration, self.rng
+                )
+                # Burn-time scale stretches descent slightly (delay / coast timing)
+                descent *= cal.corrections.burn_time_scale_factor
+
+                apogee, descent = _apply_residual_noise(
+                    result.apogee_ft, descent, calibration, self.rng
                 )
 
                 if unstable:
                     penalty = self.unstable_penalty
                 else:
                     penalty = self.scoring.score(
-                        result.apogee_ft,
+                        apogee,
                         objectives.desired_apogee_ft,
                         descent,
                         objectives.desired_time_s,
@@ -171,7 +214,7 @@ class MonteCarloRunner:
 
                 outcomes.append(
                     MCSampleOutcome(
-                        apogee_ft=result.apogee_ft,
+                        apogee_ft=apogee,
                         descent_time_s=descent,
                         penalty=penalty,
                         stability_calibers=result.rail_exit_stability_calibers,
@@ -182,7 +225,9 @@ class MonteCarloRunner:
             n = len(outcomes)
             penalties = np.array([o.penalty for o in outcomes], dtype=float)
             se = float(penalties.std(ddof=1) / np.sqrt(n)) if n > 1 else np.inf
-            if n >= self.min_samples and (se < self.se_threshold or n >= self.max_samples):
+            if n >= self.min_samples and (
+                se < self.se_threshold or n >= self.max_samples
+            ):
                 break
             if n >= self.max_samples:
                 break

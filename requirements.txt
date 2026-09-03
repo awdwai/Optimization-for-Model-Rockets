@@ -2,3 +2,6 @@ pydantic>=2.6
 numpy>=1.26
 scipy>=1.11
 pyyaml>=6.0
+pytest>=8.0
+# Optional OpenRocket bridge (also needs OpenRocket 15.03 JAR on CLASSPATH):
+#   pip install orhelper jpype1

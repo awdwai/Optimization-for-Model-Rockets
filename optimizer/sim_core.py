@@ -91,8 +91,8 @@ class AnalyticStubSim:
             * (thrust**1.1)
             / (cd_body**0.5)
         )
-        # Mild wind penalty (average wind reduces peak)
-        wind = environment.wind.ground_wind_speed_mph
+        # Mild wind penalty using option-(a) collapsed gradient when present
+        wind = collapse_wind_to_average(environment)
         apogee *= max(0.85, 1.0 - 0.004 * wind)
 
         chute_cd = corr.chute_cd(chute_diam_in)

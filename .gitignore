@@ -26,7 +26,8 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Local runtime artifacts
+# Local runtime artifacts (keep samples/)
 *.ork
-calibration/*/
-!samples/
+!samples/**/*.ork
+/calibration/
+!samples/calibration/

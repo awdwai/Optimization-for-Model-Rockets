@@ -61,11 +61,13 @@ class Atmosphere(BaseModel):
                 ),
             )
         elif da is None and rho is not None:
-            # Keep supplied density; leave DA unset unless caller derives it later.
-            pass
-        # If both supplied: trust DA for density (precedence rule) only when
-        # density was not independently intended — re-derive density from DA.
+            from optimizer.atmosphere import density_altitude_from_air_density
+
+            object.__setattr__(
+                self, "density_altitude_ft", density_altitude_from_air_density(rho)
+            )
         elif da is not None and rho is not None:
+            # Precedence: DA wins — never independently keep a conflicting ρ.
             object.__setattr__(
                 self, "air_density_slug_ft3", air_density_from_density_altitude(da)
             )
@@ -83,6 +85,11 @@ class Surface(BaseModel):
     ground_temperature_f: float
     thermal_activity_estimate: ThermalActivity | None = None
 
+    @property
+    def thermal_was_explicit(self) -> bool:
+        """True when the caller set thermal_activity_estimate (including none)."""
+        return "thermal_activity_estimate" in self.model_fields_set
+
 
 class EnvironmentalState(BaseModel):
     atmosphere: Atmosphere
@@ -91,7 +98,9 @@ class EnvironmentalState(BaseModel):
 
     @model_validator(mode="after")
     def refine_thermal_from_delta(self) -> EnvironmentalState:
-        # Respect explicit override; otherwise derive from ground − air delta.
+        # Respect explicit override (including thermal_activity_estimate: none).
+        if self.surface.thermal_was_explicit:
+            return self
         if self.surface.thermal_activity_estimate is not None:
             return self
         delta = self.surface.ground_temperature_f - self.atmosphere.air_temperature_f

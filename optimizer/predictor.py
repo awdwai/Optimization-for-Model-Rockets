@@ -72,6 +72,11 @@ class Predictor:
             return np.array([lo], dtype=float)
         return np.linspace(lo, hi, num=max(steps, 2))
 
+    def _unique_ballast(self, values: np.ndarray) -> list[float]:
+        # Round to 0.1 g so coarse/fine overlap does not double-evaluate
+        rounded = np.round(values.astype(float), 1)
+        return [float(v) for v in dict.fromkeys(rounded.tolist())]
+
     def _evaluate(
         self, predict_input: PredictInput, chute: float, ballast: float
     ) -> _CandidateEval:
@@ -92,22 +97,23 @@ class Predictor:
         best_by_chute: dict[float, _CandidateEval] = {}
 
         for chute in predict_input.chute_inventory_in:
-            # Coarse search
-            coarse = self._ballast_grid(lo, hi, cfg.ballast_coarse_steps)
+            coarse = self._unique_ballast(self._ballast_grid(lo, hi, cfg.ballast_coarse_steps))
             coarse_evals = [
-                self._evaluate(predict_input, chute, float(b)) for b in coarse
+                self._evaluate(predict_input, chute, b) for b in coarse
             ]
             coarse_best = min(coarse_evals, key=lambda e: e.score(cfg.risk_aversion))
 
-            # Refine near coarse optimum
             refine_lo = max(lo, coarse_best.ballast_g - cfg.ballast_refine_halfwidth_g)
             refine_hi = min(hi, coarse_best.ballast_g + cfg.ballast_refine_halfwidth_g)
             n_fine = max(
                 2, int(round((refine_hi - refine_lo) / cfg.ballast_fine_step_g)) + 1
             )
-            fine = self._ballast_grid(refine_lo, refine_hi, n_fine)
+            fine = self._unique_ballast(self._ballast_grid(refine_lo, refine_hi, n_fine))
+            # Skip ballast already evaluated on the coarse pass
+            coarse_set = set(coarse)
+            fine_only = [b for b in fine if b not in coarse_set]
             fine_evals = [
-                self._evaluate(predict_input, chute, float(b)) for b in fine
+                self._evaluate(predict_input, chute, b) for b in fine_only
             ]
             chute_best = min(
                 coarse_evals + fine_evals, key=lambda e: e.score(cfg.risk_aversion)
@@ -130,7 +136,7 @@ class Predictor:
             Alternate(
                 ballast_g=round(ev.ballast_g, 1),
                 chute_diam_in=chute,
-                predicted_score_penalty=round(ev.mc.mean_penalty, 3),
+                predicted_score_penalty=round(ev.score(cfg.risk_aversion), 3),
                 predicted_apogee_ft=round(ev.mc.mean_apogee_ft, 2),
                 predicted_descent_time_s=round(ev.mc.mean_descent_time_s, 2),
                 hit_probability=round(ev.mc.hit_probability, 4),
@@ -144,7 +150,7 @@ class Predictor:
             chute_diam_in=overall.chute_diam_in,
             predicted_apogee_ft=round(overall.mc.mean_apogee_ft, 2),
             predicted_descent_time_s=round(overall.mc.mean_descent_time_s, 2),
-            predicted_score_penalty=round(overall.mc.mean_penalty, 3),
+            predicted_score_penalty=round(overall.score(cfg.risk_aversion), 3),
             feasible=feasible,
             closest_miss_ft=round(
                 abs(overall.mc.mean_apogee_ft - obj.desired_apogee_ft), 2
