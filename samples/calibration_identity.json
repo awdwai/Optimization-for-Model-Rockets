@@ -1,0 +1,28 @@
+{
+  "rocket_id": "demo_rocket",
+  "version": "identity",
+  "fitted_from_flights": [],
+  "corrections": {
+    "cd_body_multiplier": 1.0,
+    "cd_chute_by_diam": [
+      {"diam_in": 12, "cd": 1.45},
+      {"diam_in": 15, "cd": 1.50},
+      {"diam_in": 18, "cd": 1.55},
+      {"diam_in": 24, "cd": 1.60}
+    ],
+    "thrust_scale_factor": 1.0,
+    "thrust_scale_std": 0.03,
+    "burn_time_scale_factor": 1.0,
+    "cp_shift_in": 0.0
+  },
+  "residual_stats": {
+    "apogee_mean_error_ft": 0.0,
+    "apogee_std_error_ft": 15.0,
+    "descent_time_mean_error_s": 0.0,
+    "descent_time_std_error_s": 1.5
+  },
+  "fit_metadata": {
+    "method": "bayesian",
+    "cp_shift_applied_to": "stability_margin_only"
+  }
+}
