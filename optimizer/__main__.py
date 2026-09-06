@@ -1,4 +1,4 @@
-"""python -m optimizer.cli …"""
+"""Entry point: python -m optimizer …"""
 
 from optimizer.cli import main
 
